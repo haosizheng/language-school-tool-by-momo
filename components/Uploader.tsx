@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState } from "react";
-import { Camera, Loader2, Sparkles, AlertCircle } from "lucide-react";
+import { Camera, Image as ImageIcon, Loader2, Sparkles, AlertCircle } from "lucide-react";
 import { WordCard } from "@/types/word";
 import { getStoredSettings } from "@/lib/storage";
 import { compressImage } from "@/lib/utils";
@@ -15,7 +15,10 @@ export function Uploader({ onSuccess, onOpenSettings }: UploaderProps) {
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState("AI 正在极速分析课本生词...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 两个独立的隐藏 input：一个强制调起后置摄像头，一个调起相册/文件选择
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -41,16 +44,24 @@ export function Uploader({ onSuccess, onOpenSettings }: UploaderProps) {
     }, 90000);
 
     try {
-      // 1. 客户端轻量高质量压缩（将大图控制在 1600px 约 300KB 以内，杜绝长耗时上传与模型超时）
-      const readyFile = await compressImage(file, 1600, 0.85);
-      console.log(`[SnapWord] 图片预处理完毕，上传体积: ${(readyFile.size / 1024).toFixed(1)} KB`);
+      // 1. 客户端轻量高质量压缩（高兼容处理，若环境受限自动降级使用原文件）
+      let readyBlob: Blob | File = file;
+      try {
+        readyBlob = await compressImage(file, 1600, 0.85);
+        console.log(`[SnapWord] 图片预处理完毕，上传体积: ${(readyBlob.size / 1024).toFixed(1)} KB`);
+      } catch (e) {
+        console.warn("[SnapWord] 预压缩跳过，直接上传原图:", e);
+        readyBlob = file;
+      }
 
       const settings = getStoredSettings();
       const currentModel = settings.model || "kimi-k2.6";
-      setStatusText(`正在调用 ${currentModel} 深度识图提取...`);
+      setStatusText(`正在调用 ${currentModel} 提取生词...`);
 
       const formData = new FormData();
-      formData.append("image", readyFile);
+      // 传参第三个参数作为文件名，完美兼容所有移动端 Safari/WebKit
+      formData.append("image", readyBlob, "textbook_snap.jpg");
+
       if (settings.apiKey) formData.append("apiKey", settings.apiKey);
       if (settings.baseUrl) formData.append("baseUrl", settings.baseUrl);
       if (settings.model) formData.append("model", settings.model);
@@ -92,7 +103,7 @@ export function Uploader({ onSuccess, onOpenSettings }: UploaderProps) {
       if (err instanceof DOMException && err.name === "AbortError") {
         setErrorMessage("请求超时（超过 90 秒），Kimi 接口无响应。请检查网络环境或尝试换一张较清晰的截图。");
       } else {
-        const msg = err instanceof Error ? err.message : "网络请求异常";
+        const msg = err instanceof Error ? err.message : String(err);
         setErrorMessage(`提取失败: ${msg}`);
       }
     } finally {
@@ -141,8 +152,9 @@ export function Uploader({ onSuccess, onOpenSettings }: UploaderProps) {
 
   return (
     <div className="p-4 bg-white border-b border-stone-100">
+      {/* 隐藏的拍照专有 Input */}
       <input
-        ref={fileInputRef}
+        ref={cameraInputRef}
         type="file"
         accept="image/*"
         capture="environment"
@@ -150,33 +162,56 @@ export function Uploader({ onSuccess, onOpenSettings }: UploaderProps) {
         className="hidden"
       />
 
+      {/* 隐藏的相册导入专有 Input */}
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
       <div className="flex flex-col gap-2">
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-          className="w-full relative overflow-hidden bg-stone-900 hover:bg-stone-800 text-white font-medium py-3.5 px-4 rounded-2xl shadow-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 disabled:opacity-85 disabled:pointer-events-none group"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin text-stone-300" />
-              <span className="text-sm font-medium tracking-wide">
-                {statusText}
-              </span>
-            </>
-          ) : (
-            <>
-              <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center text-white group-hover:scale-105 transition-transform">
-                <Camera className="w-4 h-4" />
+        {loading ? (
+          // 加载状态统一大按钮
+          <div className="w-full bg-stone-900 text-white font-medium py-3.5 px-4 rounded-2xl shadow-sm flex items-center justify-center gap-2.5">
+            <Loader2 className="w-5 h-5 animate-spin text-stone-300" />
+            <span className="text-sm font-medium tracking-wide">
+              {statusText}
+            </span>
+          </div>
+        ) : (
+          // 极简双按钮：左侧现场拍照，右侧相册选图
+          <div className="grid grid-cols-2 gap-2.5">
+            {/* 拍照按钮 */}
+            <button
+              type="button"
+              onClick={() => cameraInputRef.current?.click()}
+              className="bg-stone-900 hover:bg-stone-800 text-white font-medium py-3 px-3 rounded-2xl shadow-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 group"
+            >
+              <div className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                <Camera className="w-3.5 h-3.5" />
               </div>
-              <span className="text-sm font-semibold tracking-wide">
-                拍照 / 上传课本图片
+              <span className="text-xs sm:text-sm font-semibold tracking-tight">
+                拍照识词
               </span>
-              <span className="text-[11px] text-stone-400 ml-1 font-normal bg-white/5 px-2 py-0.5 rounded-full">
-                即拍即提
+            </button>
+
+            {/* 相册按钮 */}
+            <button
+              type="button"
+              onClick={() => galleryInputRef.current?.click()}
+              className="bg-stone-100 hover:bg-stone-200 text-stone-800 font-medium py-3 px-3 rounded-2xl border border-stone-200/60 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group"
+            >
+              <div className="w-6 h-6 rounded-lg bg-stone-200 flex items-center justify-center text-stone-700 group-hover:scale-105 transition-transform">
+                <ImageIcon className="w-3.5 h-3.5" />
+              </div>
+              <span className="text-xs sm:text-sm font-semibold tracking-tight">
+                从相册选择
               </span>
-            </>
-          )}
-        </button>
+            </button>
+          </div>
+        )}
 
         {/* 错误提示 */}
         {errorMessage && (
